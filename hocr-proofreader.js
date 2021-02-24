@@ -149,28 +149,19 @@ HocrProofreader.prototype.getHocr = function () {
 };
 
 HocrProofreader.prototype.setZoom = function (zoom) {
-    if (zoom) this.currentZoom = zoom;
-
-    if (this.currentZoom === 'page-full') {
+    if (zoom === 'page-full') {
         this.layoutSvg.style.width = null;
         this.layoutSvg.style.height = null;
         this.layoutSvg.style.maxWidth = '100%';
         this.layoutSvg.style.maxHeight = '100%';
-    } else if (this.currentZoom === 'page-width') {
+    } else if (zoom === 'page-width') {
         this.layoutSvg.style.width = null;
         this.layoutSvg.style.height = null;
         this.layoutSvg.style.maxWidth = '100%';
         this.layoutSvg.style.maxHeight = null;
-    } else if (this.currentZoom === 'original') {
-        if (this.currentPage) {
-            var options = this.getNodeOptions(this.currentPage);
-            this.layoutSvg.style.width = '' + (options.bbox[2] - options.bbox[0]) + 'px';
-            this.layoutSvg.style.height = '' + (options.bbox[3] - options.bbox[1]) + 'px';
-        } else {
-            this.layoutSvg.style.width = null;
-            this.layoutSvg.style.height = null;
-        }
-
+    } else if (zoom === 'original') {
+        this.layoutSvg.style.width = '2480px'; // TODO: use bounding box of ocr_page here
+        this.layoutSvg.style.height = '3508px'; // TODO: use bounding box of ocr_page here
         this.layoutSvg.style.maxWidth = null;
         this.layoutSvg.style.maxHeight = null;
     }
@@ -209,40 +200,18 @@ HocrProofreader.prototype.setPage = function (page) {
         skipCurrent = false;
     }
 
-    this.renderPage(pageNode || null);
+    this.currentPage = pageNode || null;
+    this.renderCurrentPage();
 };
 
-HocrProofreader.prototype.renderPage = function (pageNode) {
+HocrProofreader.prototype.renderCurrentPage = function (scrollBottom) {
     this.layoutContainer.scrollTop = 0;
     this.layoutContainer.scrollLeft = 0;
 
-    var scrollToBottom = false, tmpNode = this.currentPage;
-    while (tmpNode) {
-        tmpNode = tmpNode.previousElementSibling;
-        if (tmpNode === pageNode) {
-            scrollToBottom = true;
-            break;
-        }
-    }
-
-    function removeLinkedNodes(node) {
-        if (node.linkedNode) node.linkedNode = null;
-
-        var childNode = node.firstElementChild;
-        while (childNode) {
-            removeLinkedNodes(childNode);
-            childNode = childNode.nextElementSibling;
-        }
-    }
-    if (this.currentPage) removeLinkedNodes(this.currentPage);
+    // TODO: remove linkedNode attributes to avoid memleaks
 
     Util.removeChildren(this.layoutWords);
     Util.removeChildren(this.layoutRects);
-
-    this.currentPage = pageNode;
-
-    this.setZoom();
-    this.layoutImage.removeAttribute('transform');
 
     if (!this.currentPage) {
         // TODO: hide completely? reset image/font/viewBox/...?
@@ -251,21 +220,16 @@ HocrProofreader.prototype.renderPage = function (pageNode) {
 
     var pageOptions = this.getNodeOptions(this.currentPage);
 
-    this.layoutSvg.setAttribute('viewBox', pageOptions.bbox.join(' '));
+    this.layoutSvg.setAttribute('viewBox', pageOptions.bbox.join(' ')); // TODO: handle missing bbox (use image dimensions then)
     this.layoutWords.style.fontFamily = 'Liberation Serif, serif'; // TODO: use font from hOCR (per page)
 
     this.layoutImage.setAttributeNS('http://www.w3.org/1999/xlink', 'href', this.hocrBaseUrl + pageOptions.image);
+    // TODO: handle skew:
+    //this.layoutImage.setAttribute('transform', 'rotate(' + degree + ' ' + (pageOptions.bbox[2] / 2) + ' ' + (pageOptions.bbox[3] / 2) + ')');
 
-    if (pageOptions.textangle) {
-        // textangle is counter-clockwise, so we have to rotate the image clockwise - and transform-rotate() is clockwise:
-        this.layoutImage.setAttribute('transform', 'rotate(' + pageOptions.textangle + ' ' +
-            ((pageOptions.bbox[2] - pageOptions.bbox[0]) / 2) + ' ' +
-            ((pageOptions.bbox[3] - pageOptions.bbox[1]) / 2) + ')');
-    }
+    this.renderNodesRecursive(this.currentPage);
 
-    this.renderNodesRecursive(this.currentPage, pageOptions);
-
-    if (scrollToBottom) {
+    if (scrollBottom) {
         this.layoutContainer.scrollTop = this.layoutContainer.scrollHeight - this.layoutContainer.clientHeight;
     }
 };
@@ -301,7 +265,7 @@ HocrProofreader.prototype.renderNodesRecursive = function (node, options, parent
                 var textNode = Util.createSvgElem('text', {
                     'x': options.bbox[0],
                     'y': parseFloat(options.baselineBbox[3]) + parseFloat(options.baseline[1]),
-                    'font-size': options.x_fsize * options.scan_res[1] / 72, // 1 pt = 1/72 inch
+                    'font-size': options.x_fsize * /* TODO: options.scan_res[1] */ 300 / 72, // 1 pt = 1/72 inch
                     'textLength': options.bbox[2] - options.bbox[0],
                     'lengthAdjust': 'spacingAndGlyphs'
                 });
@@ -332,7 +296,7 @@ HocrProofreader.prototype.renderNodesRecursive = function (node, options, parent
 };
 
 HocrProofreader.prototype.getNodeOptions = function (node) {
-    var asArray = ['bbox', 'baseline', 'scan_res'];
+    var asArray = ['bbox', 'baseline'];
     var optionsStr = node.title ? node.title : '';
     var match, regex = /(?:^|;)\s*(\w+)\s+(?:([^;"']+?)|"((?:\\"|[^"])+?)"|'((?:\\'|[^'])+?)')\s*(?=;|$)/g;
 
@@ -352,7 +316,7 @@ HocrProofreader.prototype.getNodeOptions = function (node) {
 };
 
 HocrProofreader.prototype.inheritOptions = function (options, parentOptions) {
-    var inheritableOptions = ['baseline', 'baselineBbox', 'x_fsize', 'scan_res'];
+    var inheritableOptions = ['baseline', 'baselineBbox'];
 
     // baseline is relative to the bbox of the node where the baseline is defined, so we have to remember this bbox:
     if ('baseline' in options && 'bbox' in options) {
@@ -386,7 +350,17 @@ HocrProofreader.prototype.onHover = function (target, isEditorContainer) {
             pageNode = pageNode.parentElement;
         }
         if (pageNode && pageNode !== this.currentPage) {
-            this.renderPage(pageNode);
+            var backwards = false, tmpNode = this.currentPage;
+            while (tmpNode) {
+                tmpNode = tmpNode.previousElementSibling;
+                if (tmpNode === pageNode) {
+                    backwards = true;
+                    break;
+                }
+            }
+
+            this.currentPage = pageNode;
+            this.renderCurrentPage(backwards);
         }
     }
 
@@ -425,18 +399,13 @@ HocrProofreader.prototype.scrollIntoViewIfNeeded = function (node, scrollParentN
         bottom: rect.bottom - parentRect.top + scrollParentNode.scrollTop
     };
 
-    if (nodeRect.bottom - nodeRect.top <= scrollParentNode.clientHeight) { // ignore nodes higher than scroll area
-        if (nodeRect.bottom > scrollParentNode.scrollTop + scrollParentNode.clientHeight) {
-            node.scrollIntoView({behavior: 'smooth', block: 'end'});
-        } else if (nodeRect.top < scrollParentNode.scrollTop) {
-            node.scrollIntoView({behavior: 'smooth', block: 'start'});
-        }
-    }
-    if (nodeRect.right - nodeRect.left <= scrollParentNode.clientWidth) { // ignore nodes wider than scroll area
-        if (nodeRect.right > scrollParentNode.scrollLeft + scrollParentNode.clientWidth) {
-            node.scrollIntoView({behavior: 'smooth', block: 'end'});
-        } else if (nodeRect.left < scrollParentNode.scrollLeft) {
-            node.scrollIntoView({behavior: 'smooth', block: 'end'});
-        }
+    if (nodeRect.bottom > scrollParentNode.scrollTop + scrollParentNode.clientHeight) {
+        node.scrollIntoView({behavior: 'smooth', block: 'end'});
+    } else if (nodeRect.right > scrollParentNode.scrollLeft + scrollParentNode.clientWidth) {
+        node.scrollIntoView({behavior: 'smooth', block: 'end'});
+    } else if (nodeRect.top < scrollParentNode.scrollTop) {
+        node.scrollIntoView({behavior: 'smooth', block: 'start'});
+    } else if (nodeRect.left < scrollParentNode.scrollLeft) {
+        node.scrollIntoView({behavior: 'smooth', block: 'start'});
     }
 };
